@@ -10,6 +10,7 @@
 #include "FreeRTOS.h"
 #include "FreeRTOS_CLI.h"
 #include "task.h"
+#include "semphr.h"
 #include "queue.h"
 #include "stm32f401xc.h"
 #include "stm32f4xx_hal.h"
@@ -37,6 +38,7 @@
 
 char cRxData;
 QueueHandle_t xQueueRxHandle;
+QueueHandle_t xQueueMonitor;
 UART_HandleTypeDef *pxUartDevHandle;
 static const char *pcWelcomeMsg = "Welcome to the console. Enter 'help' to view a list of available commands.\n";
 
@@ -148,6 +150,12 @@ static const CLI_Command_Definition_t xCommands[] =
         "version",
         "\r\nversion: Get console version\r\n",
         prvCommandVersion,
+        0
+    },
+    {
+        "pwmMonitor",
+        "\r\npwmMonitor: Monitor a PWM channel\r\n",
+        prvCommandPwmMonitor,
         0
     },
     { NULL, NULL, NULL, 0 }
@@ -540,6 +548,32 @@ static BaseType_t prvCommandVersion(char *pcWriteBuffer, size_t xWriteBufferLen,
     return pdFALSE;
 }
 
+void pwmMonitorCh1(void)
+{
+    char outBuff[20];
+    uint32_t counter = 0;
+
+    vConsoleWrite("PWM CH1 monitor call \n");
+    snprintf(outBuff, 20, "%d", counter);
+    /* Get internal reg for PWM signal toggle*/
+}
+/**
+* @brief
+* @param *pcWriteBuffer FreeRTOS CLI write buffer.
+* @param xWriteBufferLen Length of write buffer.
+* @param *pcCommandString pointer to the command name.
+* @retval FreeRTOS status
+*/
+static BaseType_t prvCommandPwmMonitor(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString)
+{
+    BaseType_t status = pdFALSE;
+    status = xQueueSend(xQueueMonitor, pwmMonitorCh1, portMAX_DELAY);
+    startMonitoring = pdTRUE;
+    snprintf(pcWriteBuffer, xWriteBufferLen, "OK\n");
+    return pdFALSE;
+}
+
+
 /**
 * @brief Reads from UART RX buffer. Reads one bye at the time.
 * @param *cReadChar pointer to where data will be stored.
@@ -596,6 +630,42 @@ void vConsoleEnableRxInterrupt(void)
     HAL_UART_Receive_IT(pxUartDevHandle,(uint8_t*)&cRxData, 1);
 }
 
+
+BaseType_t startMonitoring = pdFALSE;
+/**
+* @brief Task to monitor a function
+* @param *pvParams Data passed at task creation.
+* @retval void
+*/
+void vTaskConsoleMonitor(void *pvParams)
+{
+    void (*ptrFunc)(void);
+
+    /* Queue to receive function pointer to be executed */
+    xQueueMonitor = xQueueCreate(1, sizeof(int));
+    if (xQueueRxHandle == NULL)
+    {
+        goto out_monitor_task;
+    }
+
+    while (1)
+    {
+        xQueueReceive(xQueueRxHandle, ptrFunc, portMAX_DELAY);
+        while (startMonitoring)
+        {
+            ptrFunc();
+        }
+
+    }
+
+
+out_monitor_task:
+    if (xQueueMonitor)
+        vQueueDelete(xQueueMonitor);
+    vTaskDelete(NULL);
+}
+
+
 /**
 * @brief Task to handle user commands via serial communication.
 * @param *pvParams Data passed at task creation.
@@ -609,6 +679,7 @@ void vTaskConsole(void *pvParams)
     char pcInputString[MAX_IN_STR_LEN];
     char pcPrevInputString[MAX_IN_STR_LEN];
     char pcOutputString[MAX_OUT_STR_LEN];
+//    uint8_t isCmdToMonitor = pdFALSE;
 
     memset(pcInputString, 0x00, MAX_IN_STR_LEN);
     memset(pcPrevInputString, 0x00, MAX_IN_STR_LEN);
@@ -623,7 +694,7 @@ void vTaskConsole(void *pvParams)
 
     vConsoleWrite(pcWelcomeMsg);
     vConsoleEnableRxInterrupt();
-    vConsoleWrite(prvpcPrompt);
+    // vConsoleWrite(prvpcPrompt);
 
     while(1)
     {
@@ -636,6 +707,10 @@ void vTaskConsole(void *pvParams)
             case ASCII_LF:
                 if (uInputIndex != 0)
                 {
+
+                    // Check if the command is monitoring
+
+//                    strcmp(pcInputString)
                     vConsoleWrite("\n\n");
                     strncpy(pcPrevInputString, pcInputString, MAX_IN_STR_LEN);
                     do
@@ -653,7 +728,7 @@ void vTaskConsole(void *pvParams)
                 memset(pcInputString, 0x00, MAX_IN_STR_LEN);
                 memset(pcOutputString, 0x00, MAX_OUT_STR_LEN);
                 vConsoleWrite("\n");
-                vConsoleWrite(prvpcPrompt);
+                // vConsoleWrite(prvpcPrompt);
                 break;
             case ASCII_FORM_FEED:
                 vConsoleWrite("\x1b[2J\x1b[0;0H");
@@ -691,7 +766,7 @@ void vTaskConsole(void *pvParams)
                 if (uInputIndex < (MAX_IN_STR_LEN - 1 ) && (cReadCh >= 32 && cReadCh <= 126))
                 {
                     pcInputString[uInputIndex] = cReadCh;
-                    vConsoleWrite(pcInputString + uInputIndex);
+//                    vConsoleWrite(pcInputString + uInputIndex);
                     uInputIndex++;
                 }
                 break;
@@ -706,6 +781,8 @@ out_task_console:
     vTaskDelete(NULL);
 }
 
+SemaphoreHandle_t semMonitor;
+
 /**
 * @brief Initialize the console by registering all commands and creating a task.
 * @param usStackSize Task console stack size
@@ -716,6 +793,7 @@ out_task_console:
 BaseType_t xbspConsoleInit(uint16_t usStackSize, UBaseType_t uxPriority, UART_HandleTypeDef *pxUartHandle)
 {
     const CLI_Command_Definition_t *pCommand;
+    BaseType_t xStatus = pdFALSE;
 
     if (pxUartHandle == NULL)
     {
@@ -723,12 +801,27 @@ BaseType_t xbspConsoleInit(uint16_t usStackSize, UBaseType_t uxPriority, UART_Ha
     }
     pxUartDevHandle = pxUartHandle;
 
+    /* Main task for receiving commands from the host*/
+    xTaskCreate(vTaskConsole,"CLI", usStackSize, NULL, uxPriority, NULL);
+    if (xStatus != pdTRUE)
+        goto out_console_init;
+
+    /* This semaphore synchronizes executing between main console and monitor task*/
+    vSemaphoreCreateBinary(semMonitor);
+    xStatus = xTaskCreate(vTaskConsoleMonitor,"console-monitor", usStackSize, NULL, uxPriority, NULL);
+    if (xStatus != pdTRUE)
+        goto out_console_init;
+
     /* Register all commands that can be accessed by the user */
     for (pCommand = xCommands; pCommand->pcCommand != NULL; pCommand++)
     {
-        FreeRTOS_CLIRegisterCommand(pCommand);
+        xStatus = FreeRTOS_CLIRegisterCommand(pCommand);
+        if (xStatus != pdTRUE)
+            goto out_console_init;
     }
-    return xTaskCreate(vTaskConsole,"CLI", usStackSize, NULL, uxPriority, NULL);
+
+out_console_init:
+    return xStatus;
 }
 
 /**
