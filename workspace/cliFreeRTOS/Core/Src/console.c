@@ -156,6 +156,12 @@ static const CLI_Command_Definition_t xCommands[] =
         "pwmMonitor",
         "\r\npwmMonitor: Monitor a PWM channel\r\n",
         prvCommandPwmMonitor,
+        1
+    },
+    {
+        "stopMonitor",
+        "\r\npwmMonitor: Stop any monitoring activity\r\n",
+        prvCommandStopMonitor,
         0
     },
     { NULL, NULL, NULL, 0 }
@@ -550,13 +556,31 @@ static BaseType_t prvCommandVersion(char *pcWriteBuffer, size_t xWriteBufferLen,
 
 void pwmMonitorCh1(void)
 {
-    char outBuff[20];
-    uint32_t counter = 0;
+    // char outBuff[20];
+    // uint32_t counter = 0;
 
     vConsoleWrite("PWM CH1 monitor call \n");
-    snprintf(outBuff, 20, "%d", counter);
-    /* Get internal reg for PWM signal toggle*/
+    // snprintf(outBuff, 20, "%d", counter);
+    /* Get internal reg for PWM signal toggle and send it via serial */
 }
+
+/**
+* @brief
+* @param *pcWriteBuffer FreeRTOS CLI write buffer.
+* @param xWriteBufferLen Length of write buffer.
+* @param *pcCommandString pointer to the command name.
+* @retval FreeRTOS status
+*/
+static BaseType_t prvCommandStopMonitor(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString)
+{
+    /* Set flag to stop monitoring, TODO: this should be change to a better
+       implementation.
+    */
+    startMonitoring = pdFALSE;
+    snprintf(pcWriteBuffer, xWriteBufferLen, "OK\n");
+    return pdFALSE;
+}
+
 /**
 * @brief
 * @param *pcWriteBuffer FreeRTOS CLI write buffer.
@@ -567,12 +591,34 @@ void pwmMonitorCh1(void)
 static BaseType_t prvCommandPwmMonitor(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString)
 {
     BaseType_t status = pdFALSE;
-    status = xQueueSend(xQueueMonitor, pwmMonitorCh1, portMAX_DELAY);
+    const char *xParamLen;
+    const char *channel;
+    void (*ptrFunctToMonitor)(void) = NULL;
+
+    channel = FreeRTOS_CLIGetParameter(pcCommandString, 1, &xParamLen);
+    switch(*channel)
+    {
+        case '1': ptrFunctToMonitor = pwmMonitorCh1;
+        case '2': vConsoleWrite("Not implemented yet\n"); break;
+        case '3': vConsoleWrite("Not implemented yet\n"); break;
+        case '4': vConsoleWrite("Not implemented yet\n"); break;
+        default: vConsoleWrite("Invalid channel\n"); break;
+    }
+
+    status = xQueueSend(xQueueMonitor, *ptrFunctToMonitor, portMAX_DELAY);
+    if (status ==  pdFALSE)
+    {
+        vConsoleWrite("Error: Queue is full\n");
+    }
+
+    /* Set flag to start monitoring, TODO: this should be change to a better
+       implementation.
+    */
     startMonitoring = pdTRUE;
+
     snprintf(pcWriteBuffer, xWriteBufferLen, "OK\n");
     return pdFALSE;
 }
-
 
 /**
 * @brief Reads from UART RX buffer. Reads one bye at the time.
@@ -610,7 +656,7 @@ static HAL_StatusTypeDef vConsoleWrite(const char *buff)
     status = HAL_UART_Transmit(pxUartDevHandle, (uint8_t *)buff, strlen(buff), portMAX_DELAY);
     if (status != HAL_OK)
     {
-    	return HAL_ERROR;
+        return HAL_ERROR;
     }
     return status;
 }
@@ -806,7 +852,7 @@ BaseType_t xbspConsoleInit(uint16_t usStackSize, UBaseType_t uxPriority, UART_Ha
     if (xStatus != pdTRUE)
         goto out_console_init;
 
-    /* This semaphore synchronizes executing between main console and monitor task*/
+    /* This semaphore synchronizes executing between main console and monitor task */
     vSemaphoreCreateBinary(semMonitor);
     xStatus = xTaskCreate(vTaskConsoleMonitor,"console-monitor", usStackSize, NULL, uxPriority, NULL);
     if (xStatus != pdTRUE)
