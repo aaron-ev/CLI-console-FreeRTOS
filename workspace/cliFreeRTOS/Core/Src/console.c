@@ -37,6 +37,7 @@
 #define ASCII_NACK                               21   /* Negative acknowledge  */
 
 char cRxData;
+BaseType_t startMonitoring;
 QueueHandle_t xQueueRxHandle;
 QueueHandle_t xQueueMonitor;
 UART_HandleTypeDef *pxUartDevHandle;
@@ -46,6 +47,8 @@ static const char *prvpcTaskListHeader = "Task states: Bl = Blocked, Re = Ready,
                                          "Task name         State  Priority  Stack remaining  CPU usage  Runtime(us)\n"\
                                          "================= =====  ========  ===============  =========  ===========\n";
 static const char *prvpcPrompt = "#cmd: ";
+
+static HAL_StatusTypeDef vConsoleWrite(const char *buff);
 
 /* Command function prototypes */
 static BaseType_t prvCommandPwmSetFreq(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString);
@@ -60,6 +63,8 @@ static BaseType_t prvCommandTicks(char *pcWriteBuffer, size_t xWriteBufferLen, c
 static BaseType_t prvCommandRtcGet(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString);
 static BaseType_t prvCommandRtcSet(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString);
 static BaseType_t prvCommandVersion(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString);
+static BaseType_t prvCommandPwmMonitor(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString);
+static BaseType_t prvCommandStopMonitor(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString);
 
 /**
 *   @brief  This function is executed in case of error occurrence.
@@ -160,7 +165,7 @@ static const CLI_Command_Definition_t xCommands[] =
     },
     {
         "stopMonitor",
-        "\r\npwmMonitor: Stop any monitoring activity\r\n",
+        "\r\stopMonitor: Stop any monitoring activity\r\n",
         prvCommandStopMonitor,
         0
     },
@@ -556,10 +561,20 @@ static BaseType_t prvCommandVersion(char *pcWriteBuffer, size_t xWriteBufferLen,
 
 void pwmMonitorCh1(void)
 {
+	char buff[20];
+	static uint8_t pinState = 0;
+
+	pinState = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0);
+	sprintf(buff, "data:%d\n", pinState);
+    vConsoleWrite(buff);
+}
+
+void pwmMonitorCh2(void)
+{
     // char outBuff[20];
     // uint32_t counter = 0;
 
-    vConsoleWrite("PWM CH1 monitor call \n");
+    vConsoleWrite("PWM CH2\n");
     // snprintf(outBuff, 20, "%d", counter);
     /* Get internal reg for PWM signal toggle and send it via serial */
 }
@@ -591,21 +606,21 @@ static BaseType_t prvCommandStopMonitor(char *pcWriteBuffer, size_t xWriteBuffer
 static BaseType_t prvCommandPwmMonitor(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString)
 {
     BaseType_t status = pdFALSE;
-    const char *xParamLen;
+    BaseType_t xParamLen;
     const char *channel;
     void (*ptrFunctToMonitor)(void) = NULL;
 
     channel = FreeRTOS_CLIGetParameter(pcCommandString, 1, &xParamLen);
     switch(*channel)
     {
-        case '1': ptrFunctToMonitor = pwmMonitorCh1;
-        case '2': vConsoleWrite("Not implemented yet\n"); break;
+        case '1': ptrFunctToMonitor = pwmMonitorCh1;break;
+        case '2': ptrFunctToMonitor = pwmMonitorCh2;break;
         case '3': vConsoleWrite("Not implemented yet\n"); break;
         case '4': vConsoleWrite("Not implemented yet\n"); break;
         default: vConsoleWrite("Invalid channel\n"); break;
     }
 
-    status = xQueueSend(xQueueMonitor, *ptrFunctToMonitor, portMAX_DELAY);
+    status = xQueueSend(xQueueMonitor, &ptrFunctToMonitor, portMAX_DELAY);
     if (status ==  pdFALSE)
     {
         vConsoleWrite("Error: Queue is full\n");
@@ -676,7 +691,6 @@ void vConsoleEnableRxInterrupt(void)
     HAL_UART_Receive_IT(pxUartDevHandle,(uint8_t*)&cRxData, 1);
 }
 
-
 BaseType_t startMonitoring = pdFALSE;
 /**
 * @brief Task to monitor a function
@@ -685,25 +699,24 @@ BaseType_t startMonitoring = pdFALSE;
 */
 void vTaskConsoleMonitor(void *pvParams)
 {
-    void (*ptrFunc)(void);
+    void (*ptrFunc)(void) = NULL;
 
     /* Queue to receive function pointer to be executed */
-    xQueueMonitor = xQueueCreate(1, sizeof(int));
-    if (xQueueRxHandle == NULL)
+    xQueueMonitor = xQueueCreate(1, sizeof(void*));
+    if (xQueueMonitor == NULL)
     {
         goto out_monitor_task;
     }
 
     while (1)
     {
-        xQueueReceive(xQueueRxHandle, ptrFunc, portMAX_DELAY);
+        xQueueReceive(xQueueMonitor, &ptrFunc, portMAX_DELAY);
         while (startMonitoring)
         {
             ptrFunc();
         }
 
     }
-
 
 out_monitor_task:
     if (xQueueMonitor)
@@ -725,7 +738,6 @@ void vTaskConsole(void *pvParams)
     char pcInputString[MAX_IN_STR_LEN];
     char pcPrevInputString[MAX_IN_STR_LEN];
     char pcOutputString[MAX_OUT_STR_LEN];
-//    uint8_t isCmdToMonitor = pdFALSE;
 
     memset(pcInputString, 0x00, MAX_IN_STR_LEN);
     memset(pcPrevInputString, 0x00, MAX_IN_STR_LEN);
@@ -740,7 +752,7 @@ void vTaskConsole(void *pvParams)
 
     vConsoleWrite(pcWelcomeMsg);
     vConsoleEnableRxInterrupt();
-    // vConsoleWrite(prvpcPrompt);
+    vConsoleWrite(prvpcPrompt);
 
     while(1)
     {
@@ -753,10 +765,6 @@ void vTaskConsole(void *pvParams)
             case ASCII_LF:
                 if (uInputIndex != 0)
                 {
-
-                    // Check if the command is monitoring
-
-//                    strcmp(pcInputString)
                     vConsoleWrite("\n\n");
                     strncpy(pcPrevInputString, pcInputString, MAX_IN_STR_LEN);
                     do
@@ -774,7 +782,7 @@ void vTaskConsole(void *pvParams)
                 memset(pcInputString, 0x00, MAX_IN_STR_LEN);
                 memset(pcOutputString, 0x00, MAX_OUT_STR_LEN);
                 vConsoleWrite("\n");
-                // vConsoleWrite(prvpcPrompt);
+                vConsoleWrite(prvpcPrompt);
                 break;
             case ASCII_FORM_FEED:
                 vConsoleWrite("\x1b[2J\x1b[0;0H");
@@ -812,7 +820,7 @@ void vTaskConsole(void *pvParams)
                 if (uInputIndex < (MAX_IN_STR_LEN - 1 ) && (cReadCh >= 32 && cReadCh <= 126))
                 {
                     pcInputString[uInputIndex] = cReadCh;
-//                    vConsoleWrite(pcInputString + uInputIndex);
+                   vConsoleWrite(pcInputString + uInputIndex);
                     uInputIndex++;
                 }
                 break;
@@ -848,7 +856,7 @@ BaseType_t xbspConsoleInit(uint16_t usStackSize, UBaseType_t uxPriority, UART_Ha
     pxUartDevHandle = pxUartHandle;
 
     /* Main task for receiving commands from the host*/
-    xTaskCreate(vTaskConsole,"CLI", usStackSize, NULL, uxPriority, NULL);
+    xStatus = xTaskCreate(vTaskConsole,"CLI", usStackSize, NULL, uxPriority, NULL);
     if (xStatus != pdTRUE)
         goto out_console_init;
 
