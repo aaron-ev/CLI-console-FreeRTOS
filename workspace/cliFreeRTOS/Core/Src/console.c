@@ -65,6 +65,7 @@ static BaseType_t prvCommandRtcSet(char *pcWriteBuffer, size_t xWriteBufferLen, 
 static BaseType_t prvCommandVersion(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString);
 static BaseType_t prvCommandPwmMonitor(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString);
 static BaseType_t prvCommandStopMonitor(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString);
+static BaseType_t prvCommandPing(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString);
 
 /**
 *   @brief  This function is executed in case of error occurrence.
@@ -165,8 +166,14 @@ static const CLI_Command_Definition_t xCommands[] =
     },
     {
         "stopMonitor",
-        "\r\stopMonitor: Stop any monitoring activity\r\n",
+        "\r\ntopMonitor: Stop any monitoring activity\r\n",
         prvCommandStopMonitor,
+        0
+    },
+    {
+        "ping",
+        "\r\nping: Ping the microcontroller\r\n",
+        prvCommandPing,
         0
     },
     { NULL, NULL, NULL, 0 }
@@ -636,6 +643,19 @@ static BaseType_t prvCommandPwmMonitor(char *pcWriteBuffer, size_t xWriteBufferL
 }
 
 /**
+* @brief Ping the microcontroller
+* @param *pcWriteBuffer FreeRTOS CLI write buffer.
+* @param xWriteBufferLen Length of write buffer.
+* @param *pcCommandString pointer to the command name.
+* @retval FreeRTOS status
+*/
+static BaseType_t prvCommandPing(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString)
+{
+    snprintf(pcWriteBuffer, xWriteBufferLen, "OK\n");
+    return pdFALSE;
+}
+
+/**
 * @brief Reads from UART RX buffer. Reads one bye at the time.
 * @param *cReadChar pointer to where data will be stored.
 * @retval FreeRTOS status
@@ -723,7 +743,6 @@ out_monitor_task:
         vQueueDelete(xQueueMonitor);
     vTaskDelete(NULL);
 }
-
 
 /**
 * @brief Task to handle user commands via serial communication.
